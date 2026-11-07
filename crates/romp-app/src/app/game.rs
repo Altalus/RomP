@@ -1062,7 +1062,9 @@ impl Controller {
                 here.as_deref().map(|p| p.to_string_lossy()).as_deref(),
             );
         }
-        self.refresh_game_page(false);
+        // Reload: `local_path` just changed in the store, and the in-memory copy still
+        // points at the previous file, which would leave a stale Play/Download button.
+        self.refresh_game_page(true);
         if let Some(detail) = self.current_game() {
             self.show_save_slots(&detail);
         }
