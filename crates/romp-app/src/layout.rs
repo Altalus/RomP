@@ -160,6 +160,22 @@ const NOT_PLAYABLE: [&str; 6] = [
 const SHEETS: [&str; 4] = ["cue", "gdi", "ccd", "mds"];
 const TRACKS: [&str; 4] = ["bin", "img", "raw", "sub"];
 
+/// Whether `p` is a playlist naming a game's discs, whose entries live in other files.
+pub fn is_playlist(p: &Path) -> bool {
+    ext(p) == "m3u"
+}
+
+/// Whether `p` is part of a disc game: a disc, its sheets and tracks, or a playlist
+/// naming them. Used to keep a server-side playlist playable without fetching a game's
+/// unrelated files, which an `.m3u` can't name on its own.
+pub fn is_disc_media(p: &Path) -> bool {
+    let e = ext(p);
+    e == "m3u"
+        || DISC_ORDER.contains(&e.as_str())
+        || SHEETS.contains(&e.as_str())
+        || TRACKS.contains(&e.as_str())
+}
+
 fn folder(p: &Path) -> &Path {
     p.parent().unwrap_or(Path::new(""))
 }
@@ -604,6 +620,20 @@ mod tests {
         assert_eq!(number("Game (CDi).chd"), None);
         assert_eq!(number("Game (Discovery).chd"), None);
         assert_eq!(number("Game.chd"), None);
+    }
+
+    #[test]
+    fn playlists_keep_their_disc_media_but_not_extras() {
+        let media = |name: &str| is_disc_media(Path::new(name));
+        assert!(is_playlist(Path::new("Game.m3u")));
+        assert!(!is_playlist(Path::new("Game.cue")));
+        assert!(media("Game.m3u"));
+        assert!(media("Arc (Disc 1).chd"));
+        assert!(media("CD/Game.cue"));
+        assert!(media("CD/Game (Track 1).bin"));
+        assert!(!media("01 Tune.spc"));
+        assert!(!media("7.pdf"));
+        assert!(!media("Hyper.smc"));
     }
 
     #[test]

@@ -1,6 +1,10 @@
 use crate::download::{already_there, download_file, DownloadError, Foreign};
-use crate::layout::{file_choices, files_for, launch_target, m3u, plan, safe_component, Launch};
+use crate::layout::{
+    file_choices, files_for, is_disc_media, is_playlist, launch_target, m3u, plan, safe_component,
+    Launch, PlannedFile,
+};
 use crate::romm::client::Client;
+use crate::romm::types::RomDetail;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
@@ -42,6 +46,44 @@ pub struct Downloaded {
     pub choices: Vec<PathBuf>,
 }
 
+/// The files a page download needs: what playing the game starts, and nothing else.
+/// A picked file comes down alone (with its tracks when it's a disc sheet); the
+/// automatic choice likewise, every disc of a multi-disc game, and the whole folder
+/// for PS3 games, which play from it. Soundtracks, manuals and the like never do.
+fn scoped_files(rom: &RomDetail, files: Vec<PlannedFile>, pick: Option<&Path>) -> Vec<PlannedFile> {
+    if rom.platform_slug == crate::rpcs3::PLATFORM {
+        return files;
+    }
+    if let Some(pick) = pick {
+        let needed = files_for(pick, &files);
+        return files
+            .into_iter()
+            .filter(|f| needed.contains(&f.rel_path))
+            .collect();
+    }
+    let sized: Vec<(PathBuf, u64)> = files
+        .iter()
+        .map(|f| (f.rel_path.clone(), f.file.file_size_bytes.max(0) as u64))
+        .collect();
+    let needed: Vec<PathBuf> = match launch_target(rom, &sized) {
+        Some(Launch::Playlist { discs, .. }) => {
+            discs.iter().flat_map(|d| files_for(d, &files)).collect()
+        }
+        // A playlist names its discs in other files, which can't be read here.
+        Some(Launch::File(rel)) if is_playlist(&rel) => files
+            .iter()
+            .filter(|f| is_disc_media(&f.rel_path))
+            .map(|f| f.rel_path.clone())
+            .collect(),
+        Some(Launch::File(rel)) => files_for(&rel, &files),
+        None => files.iter().map(|f| f.rel_path.clone()).collect(),
+    };
+    files
+        .into_iter()
+        .filter(|f| needed.contains(&f.rel_path))
+        .collect()
+}
+
 pub async fn download_files(
     client: &Client,
     rom_id: i64,
@@ -66,23 +108,13 @@ pub async fn download_files(
     let choices = file_choices(&rom, &files);
     // A file the player chose to start with is all that's needed of the game.
     let pick = pick.filter(|p| choices.iter().any(|c| c == p));
-    let files: Vec<_> = match pick {
-        Some(pick) => {
-            let needed = files_for(pick, &files);
-            files
-                .into_iter()
-                .filter(|f| needed.contains(&f.rel_path))
-                .collect()
-        }
-        None => files,
-    };
     // RomM's "Install on device" names the files to send: the game, its updates and DLC.
     let files: Vec<_> = match only {
         Some(ids) => files
             .into_iter()
             .filter(|f| ids.contains(&f.file.id))
             .collect(),
-        None => files,
+        None => scoped_files(&rom, files, pick),
     };
     if files.is_empty() {
         return Err(DownloadError::Io("nothing to download".into()));
@@ -287,6 +319,154 @@ mod tests {
             done.choices,
             [PathBuf::from("Hyper.smc"), PathBuf::from("Original.zip")]
         );
+    }
+
+    #[tokio::test]
+    async fn automatic_choice_downloads_only_itself() {
+        // RomP issue #39: a folder game RomM flags as single-file, one game beside
+        // hacks, a soundtrack and a manual. The automatic choice used to fetch all of it.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/roms/7"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": 7, "platform_id": 3, "platform_slug": "snes", "fs_name": "Metroid", "fs_path": "roms/snes",
+                "has_multiple_files": false,
+                "files": [
+                    {"id": 1, "file_name": "Metroid.zip", "file_path": "roms/snes/Metroid", "file_size_bytes": 3, "sha1_hash": null},
+                    {"id": 2, "file_name": "Hyper.smc", "file_path": "roms/snes/Metroid/hack", "file_size_bytes": 4, "sha1_hash": null, "category": "hack"},
+                    {"id": 3, "file_name": "01 Tune.spc", "file_path": "roms/snes/Metroid/soundtrack", "file_size_bytes": 3, "sha1_hash": null, "category": "soundtrack"},
+                    {"id": 4, "file_name": "7.pdf", "file_path": "roms/snes/Metroid/manual", "file_size_bytes": 3, "sha1_hash": null, "category": "manual"}
+                ]})))
+            .mount(&server)
+            .await;
+        for (id, body, times) in [
+            ("1", "zip", 1),
+            ("2", "hack", 0),
+            ("3", "spc", 0),
+            ("4", "pdf", 0),
+        ] {
+            Mock::given(method("GET"))
+                .and(query_param("file_ids", id))
+                .respond_with(ResponseTemplate::new(200).set_body_string(body))
+                .expect(times)
+                .mount(&server)
+                .await;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let client = Client::new(base_of(&server, "/")).with_token("t".into());
+        let done = download_files(
+            &client,
+            7,
+            dir.path(),
+            None,
+            None,
+            &|_, _| {},
+            &AtomicBool::new(false),
+        )
+        .await
+        .unwrap();
+        let game_dir = dir.path().join("snes/7");
+        assert_eq!(done.launch, game_dir.join("Metroid/Metroid.zip"));
+        assert_eq!(
+            std::fs::read(game_dir.join("Metroid/Metroid.zip")).unwrap(),
+            b"zip"
+        );
+        assert!(!game_dir.join("Metroid/hack/Hyper.smc").exists());
+        assert!(!game_dir.join("Metroid/soundtrack").exists());
+        assert_eq!(done.choices.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn server_playlist_downloads_its_discs_but_not_extras() {
+        // An FFVII-style folder: an .m3u naming a disc in another folder, beside music.
+        // The playlist itself can't name what's needed, so its disc media comes along.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/roms/7"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": 7, "platform_id": 32, "platform_slug": "psx", "fs_name": "Game", "fs_path": "roms/psx",
+                "has_multiple_files": true,
+                "files": [
+                    {"id": 1, "file_name": "Game.m3u", "file_path": "roms/psx/Game", "file_size_bytes": 4, "sha1_hash": null},
+                    {"id": 2, "file_name": "Game.cue", "file_path": "roms/psx/Game/CD", "file_size_bytes": 3, "sha1_hash": null},
+                    {"id": 3, "file_name": "Game (Track 1).bin", "file_path": "roms/psx/Game/CD", "file_size_bytes": 3, "sha1_hash": null},
+                    {"id": 4, "file_name": "01 Tune.spc", "file_path": "roms/psx/Game/soundtrack", "file_size_bytes": 3, "sha1_hash": null, "category": "soundtrack"}
+                ]})))
+            .mount(&server)
+            .await;
+        for (id, body, times) in [
+            ("1", "list", 1),
+            ("2", "cue", 1),
+            ("3", "bin", 1),
+            ("4", "spc", 0),
+        ] {
+            Mock::given(method("GET"))
+                .and(query_param("file_ids", id))
+                .respond_with(ResponseTemplate::new(200).set_body_string(body))
+                .expect(times)
+                .mount(&server)
+                .await;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let client = Client::new(base_of(&server, "/")).with_token("t".into());
+        let done = download_files(
+            &client,
+            7,
+            dir.path(),
+            None,
+            None,
+            &|_, _| {},
+            &AtomicBool::new(false),
+        )
+        .await
+        .unwrap();
+        let game_dir = dir.path().join("psx/7");
+        assert_eq!(done.launch, game_dir.join("Game.m3u"));
+        assert!(game_dir.join("CD/Game.cue").exists());
+        assert!(game_dir.join("CD/Game (Track 1).bin").exists());
+        assert!(!game_dir.join("soundtrack").exists());
+    }
+
+    #[tokio::test]
+    async fn multi_disc_playlist_skips_extras() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/roms/7"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": 7, "platform_id": 32, "platform_slug": "psx", "fs_name": "Arc", "fs_path": "roms/psx",
+                "has_multiple_files": true,
+                "files": [
+                    {"id": 1, "file_name": "Arc (Disc 1).chd", "file_path": "roms/psx/Arc", "file_size_bytes": 3, "sha1_hash": null},
+                    {"id": 2, "file_name": "Arc (Disc 2).chd", "file_path": "roms/psx/Arc", "file_size_bytes": 4, "sha1_hash": null},
+                    {"id": 3, "file_name": "7.pdf", "file_path": "roms/psx/Arc/manual", "file_size_bytes": 3, "sha1_hash": null, "category": "manual"}
+                ]})))
+            .mount(&server)
+            .await;
+        for (id, body, times) in [("1", "one", 1), ("2", "disc", 1), ("3", "pdf", 0)] {
+            Mock::given(method("GET"))
+                .and(query_param("file_ids", id))
+                .respond_with(ResponseTemplate::new(200).set_body_string(body))
+                .expect(times)
+                .mount(&server)
+                .await;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let client = Client::new(base_of(&server, "/")).with_token("t".into());
+        let launch = download_files(
+            &client,
+            7,
+            dir.path(),
+            None,
+            None,
+            &|_, _| {},
+            &AtomicBool::new(false),
+        )
+        .await
+        .unwrap()
+        .launch;
+        let game_dir = dir.path().join("psx/7");
+        assert_eq!(launch, game_dir.join("Arc.m3u"));
+        assert!(!game_dir.join("manual").exists());
     }
 
     #[tokio::test]
