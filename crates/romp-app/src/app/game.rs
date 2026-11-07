@@ -1014,14 +1014,10 @@ impl Controller {
             .and_then(|chosen| files.iter().position(|f| *f == chosen))
             .unwrap_or(0);
         if let Some(ui) = self.ui() {
-            let labels: Vec<SharedString> = files
-                .iter()
-                .map(|f| {
-                    Path::new(f)
-                        .file_name()
-                        .map_or_else(|| f.clone(), |n| n.to_string_lossy().into_owned())
-                        .into()
-                })
+            let paths: Vec<PathBuf> = files.iter().map(PathBuf::from).collect();
+            let labels: Vec<SharedString> = crate::layout::file_labels(&paths)
+                .into_iter()
+                .map(Into::into)
                 .collect();
             ui.set_game_files(ModelRc::new(VecModel::from(labels)));
             ui.set_game_file_index(index as i32);

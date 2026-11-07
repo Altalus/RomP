@@ -176,6 +176,58 @@ pub fn is_disc_media(p: &Path) -> bool {
         || TRACKS.contains(&e.as_str())
 }
 
+/// The folders a playlist's discs live in: beside it, or in a folder named after it
+/// (RomM keeps each translation set in `.Name`, after the playlist's own name).
+fn set_folders(m3u: &Path) -> Vec<PathBuf> {
+    let home = folder(m3u).to_path_buf();
+    let stem = m3u
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    vec![home.clone(), home.join(format!(".{stem}")), home.join(stem)]
+}
+
+/// Whether `p` belongs to `m3u`'s set: the disc media beside it, or the files in its
+/// set folders. Other playlists never do, so sets can't swallow each other.
+fn in_set(m3u: &Path, p: &Path) -> bool {
+    if p == m3u || is_playlist(p) || is_extra(p) {
+        return false;
+    }
+    let folders = set_folders(m3u);
+    let parent = folder(p);
+    if parent == folders[0] {
+        return is_disc_media(p);
+    }
+    folders[1..].iter().any(|d| *d == parent)
+}
+
+/// The discs a playlist starts: what belongs to its set. Empty when nothing claims it,
+/// such as a playlist whose discs sit in an unrelated folder.
+pub fn playlist_set(m3u: &Path, files: &[PlannedFile]) -> Vec<PathBuf> {
+    if !is_playlist(m3u) {
+        return Vec::new();
+    }
+    files
+        .iter()
+        .filter(|f| in_set(m3u, &f.rel_path))
+        .map(|f| f.rel_path.clone())
+        .collect()
+}
+
+/// What downloading a playlist needs: the playlist itself and its set, or all disc
+/// media when it owns no set.
+pub fn playlist_files(m3u: &Path, files: &[PlannedFile]) -> Vec<PathBuf> {
+    let set = playlist_set(m3u, files);
+    if set.is_empty() {
+        return files
+            .iter()
+            .filter(|f| is_disc_media(&f.rel_path))
+            .map(|f| f.rel_path.clone())
+            .collect();
+    }
+    std::iter::once(m3u.to_path_buf()).chain(set).collect()
+}
+
 fn folder(p: &Path) -> &Path {
     p.parent().unwrap_or(Path::new(""))
 }
@@ -188,9 +240,10 @@ fn is_track(p: &Path, files: &[PlannedFile]) -> bool {
         })
 }
 
-/// The files a player can choose to start a multi-file game with, such as a game with its
-/// translations or a folder of hacks of one game, the one RomP starts by itself first; or
-/// nothing when RomP starts the whole set itself: several discs, a PS3 game.
+/// The files a player can choose to start a multi-file game with: each playlist by
+/// the name on its cover (without the extension) with its discs under it, then the
+/// lone files, the one RomP starts by itself first; or nothing when RomP starts the
+/// whole set itself: several discs with no playlist, a PS3 game.
 ///
 /// RomM reports `has_multiple_files` as false when a folder holds one game file beside its
 /// hacks or translations, so this goes by how many playable files there are instead.
@@ -205,7 +258,7 @@ pub fn file_choices(rom: &RomDetail, files: &[PlannedFile]) -> Vec<PathBuf> {
     let Some(Launch::File(automatic)) = launch_target(rom, &sized) else {
         return Vec::new();
     };
-    let mut choices: Vec<PathBuf> = files
+    let mut pool: Vec<PathBuf> = files
         .iter()
         .filter(|f| {
             f.file
@@ -216,11 +269,72 @@ pub fn file_choices(rom: &RomDetail, files: &[PlannedFile]) -> Vec<PathBuf> {
         .map(|f| f.rel_path.clone())
         .filter(|p| !is_extra(p) && ext(p) != "m3u" && !is_track(p, files))
         .collect();
-    if choices.len() < 2 {
+    // Playlists that own discs, the automatic set first, then by name. A playlist with
+    // no set stays hidden: its discs show as lone files instead.
+    let mut lists: Vec<PathBuf> = files
+        .iter()
+        .map(|f| &f.rel_path)
+        .filter(|p| is_playlist(p) && !playlist_set(p, files).is_empty())
+        .cloned()
+        .collect();
+    lists.sort_by_cached_key(|m| (m != &automatic, m.to_string_lossy().to_lowercase()));
+    let mut grouped: Vec<PathBuf> = Vec::new();
+    for m3u in &lists {
+        let mut discs = playlist_set(m3u, files);
+        discs.sort_by_cached_key(|p| p.to_string_lossy().to_lowercase());
+        grouped.extend(discs);
+    }
+    // The automatic choice leads, then each set with its discs, then the lone files.
+    let mut ordered = Vec::new();
+    if !lists.contains(&automatic) {
+        ordered.push(automatic.clone());
+    }
+    for m3u in &lists {
+        ordered.push(m3u.clone());
+        let mut discs = playlist_set(m3u, files);
+        discs.sort_by_cached_key(|p| p.to_string_lossy().to_lowercase());
+        ordered.extend(discs);
+    }
+    pool.sort_by_cached_key(|p| p.to_string_lossy().to_lowercase());
+    for p in pool {
+        if p != automatic && !grouped.contains(&p) {
+            ordered.push(p);
+        }
+    }
+    if ordered.len() < 2 {
         return Vec::new();
     }
-    choices.sort_by_cached_key(|p| (*p != automatic, p.to_string_lossy().to_lowercase()));
-    choices
+    ordered
+}
+
+/// How the file menu shows its entries: playlists by their name, their discs offset
+/// under them, lone files as they are.
+pub fn file_labels(choices: &[PathBuf]) -> Vec<String> {
+    fn stem(p: &Path) -> String {
+        p.file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    }
+    fn name(p: &Path) -> String {
+        p.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    }
+    let mut labels = Vec::with_capacity(choices.len());
+    let mut set: Option<PathBuf> = None;
+    for p in choices {
+        if is_playlist(p) {
+            labels.push(stem(p));
+            set = Some(p.clone());
+        } else {
+            let member = set.as_deref().is_some_and(|m| in_set(m, p));
+            if !member {
+                set = None;
+            }
+            labels.push(format!("{}{}", if member { "  " } else { "" }, name(p)));
+        }
+    }
+    labels
 }
 
 /// The files that starting with `pick` needs: it, and the tracks beside it when it's a sheet.
@@ -634,6 +748,70 @@ mod tests {
         assert!(!media("01 Tune.spc"));
         assert!(!media("7.pdf"));
         assert!(!media("Hyper.smc"));
+    }
+
+    #[test]
+    fn playlists_offer_their_sets_with_discs_under_them() {
+        let dir = "roms/psx/Game";
+        let mut r = rom(
+            true,
+            vec![
+                file(1, dir, "Game.m3u"),
+                file(2, &format!("{dir}/.Game"), "Game (Disc 1).chd"),
+                file(3, &format!("{dir}/.Game"), "Game (Disc 2).chd"),
+                file(4, &format!("{dir}/translation"), "T.m3u"),
+                file(5, &format!("{dir}/translation/.T"), "T (Disc 1).chd"),
+                file(6, &format!("{dir}/manual"), "7.pdf"),
+            ],
+        );
+        r.fs_path = "roms/psx".into();
+        r.fs_name = "Game".into();
+        r.platform_slug = "psx".into();
+        let planned = plan(&r).unwrap();
+        let got = file_choices(&r, &planned);
+        assert_eq!(
+            got,
+            [
+                "Game.m3u",
+                ".Game/Game (Disc 1).chd",
+                ".Game/Game (Disc 2).chd",
+                "translation/T.m3u",
+                "translation/.T/T (Disc 1).chd",
+            ]
+            .map(PathBuf::from)
+        );
+        assert_eq!(
+            file_labels(&got),
+            [
+                "Game",
+                "  Game (Disc 1).chd",
+                "  Game (Disc 2).chd",
+                "T",
+                "  T (Disc 1).chd",
+            ]
+        );
+    }
+
+    #[test]
+    fn lone_files_stay_flat() {
+        let dir = "roms/snes/Metroid";
+        let mut r = rom(
+            false,
+            vec![
+                file(1, dir, "Metroid.zip"),
+                file(2, &format!("{dir}/hack"), "Hyper.smc"),
+            ],
+        );
+        r.fs_path = "roms/snes".into();
+        r.fs_name = "Metroid".into();
+        r.platform_slug = "snes".into();
+        let planned = plan(&r).unwrap();
+        let got = file_choices(&r, &planned);
+        assert_eq!(got.len(), 2);
+        assert_eq!(
+            file_labels(&got),
+            ["Metroid.zip".to_string(), "Hyper.smc".to_string()]
+        );
     }
 
     #[test]

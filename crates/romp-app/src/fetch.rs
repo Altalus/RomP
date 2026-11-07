@@ -1,6 +1,6 @@
 use crate::download::{already_there, download_file, DownloadError, Foreign};
 use crate::layout::{
-    file_choices, files_for, is_disc_media, is_playlist, launch_target, m3u, plan, safe_component,
+    file_choices, files_for, is_playlist, launch_target, m3u, plan, playlist_files, safe_component,
     Launch, PlannedFile,
 };
 use crate::romm::client::Client;
@@ -55,7 +55,11 @@ fn scoped_files(rom: &RomDetail, files: Vec<PlannedFile>, pick: Option<&Path>) -
         return files;
     }
     if let Some(pick) = pick {
-        let needed = files_for(pick, &files);
+        let needed = if is_playlist(pick) {
+            playlist_files(pick, &files)
+        } else {
+            files_for(pick, &files)
+        };
         return files
             .into_iter()
             .filter(|f| needed.contains(&f.rel_path))
@@ -70,11 +74,7 @@ fn scoped_files(rom: &RomDetail, files: Vec<PlannedFile>, pick: Option<&Path>) -
             discs.iter().flat_map(|d| files_for(d, &files)).collect()
         }
         // A playlist names its discs in other files, which can't be read here.
-        Some(Launch::File(rel)) if is_playlist(&rel) => files
-            .iter()
-            .filter(|f| is_disc_media(&f.rel_path))
-            .map(|f| f.rel_path.clone())
-            .collect(),
+        Some(Launch::File(rel)) if is_playlist(&rel) => playlist_files(&rel, &files),
         Some(Launch::File(rel)) => files_for(&rel, &files),
         None => files.iter().map(|f| f.rel_path.clone()).collect(),
     };
@@ -425,6 +425,107 @@ mod tests {
         assert!(game_dir.join("CD/Game.cue").exists());
         assert!(game_dir.join("CD/Game (Track 1).bin").exists());
         assert!(!game_dir.join("soundtrack").exists());
+    }
+
+    #[tokio::test]
+    async fn playlist_set_downloads_only_its_discs() {
+        // A base set beside one translation set and a soundtrack: the automatic
+        // playlist takes its own discs, nothing else.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/roms/7"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": 7, "platform_id": 32, "platform_slug": "psx", "fs_name": "Game", "fs_path": "roms/psx",
+                "has_multiple_files": true,
+                "files": [
+                    {"id": 1, "file_name": "Game.m3u", "file_path": "roms/psx/Game", "file_size_bytes": 4, "sha1_hash": null},
+                    {"id": 2, "file_name": "Game (Disc 1).chd", "file_path": "roms/psx/Game/.Game", "file_size_bytes": 4, "sha1_hash": null},
+                    {"id": 3, "file_name": "Game (Disc 2).chd", "file_path": "roms/psx/Game/.Game", "file_size_bytes": 4, "sha1_hash": null},
+                    {"id": 4, "file_name": "T.m3u", "file_path": "roms/psx/Game/translation", "file_size_bytes": 3, "sha1_hash": null, "category": "translation"},
+                    {"id": 5, "file_name": "T (Disc 1).chd", "file_path": "roms/psx/Game/translation/.T", "file_size_bytes": 4, "sha1_hash": null, "category": "translation"},
+                    {"id": 6, "file_name": "01 Tune.spc", "file_path": "roms/psx/Game/soundtrack", "file_size_bytes": 3, "sha1_hash": null, "category": "soundtrack"}
+                ]})))
+            .mount(&server)
+            .await;
+        for (id, body, times) in [
+            ("1", "list", 1),
+            ("2", "done", 1),
+            ("3", "dtwo", 1),
+            ("4", "t-m", 0),
+            ("5", "td1!", 0),
+            ("6", "spc", 0),
+        ] {
+            Mock::given(method("GET"))
+                .and(query_param("file_ids", id))
+                .respond_with(ResponseTemplate::new(200).set_body_string(body))
+                .expect(times)
+                .mount(&server)
+                .await;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let client = Client::new(base_of(&server, "/")).with_token("t".into());
+        let done = download_files(
+            &client,
+            7,
+            dir.path(),
+            None,
+            None,
+            &|_, _| {},
+            &AtomicBool::new(false),
+        )
+        .await
+        .unwrap();
+        let game_dir = dir.path().join("psx/7");
+        assert_eq!(done.launch, game_dir.join("Game.m3u"));
+        assert_eq!(done.choices.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn picked_playlist_downloads_only_its_set() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/roms/7"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": 7, "platform_id": 32, "platform_slug": "psx", "fs_name": "Game", "fs_path": "roms/psx",
+                "has_multiple_files": true,
+                "files": [
+                    {"id": 1, "file_name": "Game.m3u", "file_path": "roms/psx/Game", "file_size_bytes": 4, "sha1_hash": null},
+                    {"id": 2, "file_name": "Game (Disc 1).chd", "file_path": "roms/psx/Game/.Game", "file_size_bytes": 4, "sha1_hash": null},
+                    {"id": 4, "file_name": "T.m3u", "file_path": "roms/psx/Game/translation", "file_size_bytes": 3, "sha1_hash": null, "category": "translation"},
+                    {"id": 5, "file_name": "T (Disc 1).chd", "file_path": "roms/psx/Game/translation/.T", "file_size_bytes": 4, "sha1_hash": null, "category": "translation"}
+                ]})))
+            .mount(&server)
+            .await;
+        for (id, body, times) in [
+            ("1", "list", 0),
+            ("2", "done", 0),
+            ("4", "t-m", 1),
+            ("5", "td1!", 1),
+        ] {
+            Mock::given(method("GET"))
+                .and(query_param("file_ids", id))
+                .respond_with(ResponseTemplate::new(200).set_body_string(body))
+                .expect(times)
+                .mount(&server)
+                .await;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let client = Client::new(base_of(&server, "/")).with_token("t".into());
+        let done = download_files(
+            &client,
+            7,
+            dir.path(),
+            None,
+            Some(Path::new("translation/T.m3u")),
+            &|_, _| {},
+            &AtomicBool::new(false),
+        )
+        .await
+        .unwrap();
+        let game_dir = dir.path().join("psx/7");
+        assert_eq!(done.launch, game_dir.join("translation/T.m3u"));
+        assert!(game_dir.join("translation/.T/T (Disc 1).chd").exists());
+        assert!(!game_dir.join("Game.m3u").exists());
     }
 
     #[tokio::test]
