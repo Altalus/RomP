@@ -125,7 +125,7 @@ impl Controller {
         }
         let rom = detail.local_path.as_deref().map(std::path::Path::new);
         let (save_file, save_emulator) = crate::saves::in_game_save(core.id, &dir, rom);
-        Some(GameSaves {
+        let game = GameSaves {
             rom_id: detail.id,
             dir,
             title: detail.title.clone(),
@@ -133,7 +133,11 @@ impl Controller {
             save_file,
             save_emulator,
             variant,
-        })
+        };
+        // Some cores keep their save in a subfolder they won't create themselves, such
+        // as ARMSX2's memory card, which the game then sees as not inserted.
+        crate::saves::ensure_save_folder(&game);
+        Some(game)
     }
 
     pub(super) fn clear_conflict(&self) {

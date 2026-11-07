@@ -264,6 +264,20 @@ pub fn variant_of(file: &str) -> String {
     }
 }
 
+/// Makes the folder a core keeps its in-game save in. Most saves sit beside the game,
+/// but ARMSX2's memory card lives two folders down in one the core won't create itself,
+/// so without this the game reports no memory card inserted and nothing ever syncs.
+pub fn ensure_save_folder(game: &GameSaves) {
+    let folder = Path::new(&game.save_file)
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty());
+    if let Some(folder) = folder {
+        if let Err(e) = std::fs::create_dir_all(game.dir.join(folder)) {
+            tracing::warn!("making {}'s save folder: {e}", game.title);
+        }
+    }
+}
+
 /// The file a core keeps its in-game saves in, relative to the game's save folder, and the
 /// emulator name it syncs under.
 pub fn in_game_save(core_id: &str, dir: &Path, rom: Option<&Path>) -> (String, String) {
@@ -1361,6 +1375,30 @@ mod tests {
         std::fs::create_dir_all(root.path().join("3")).unwrap();
         std::fs::write(root.path().join("3/Stonekeep.pure.zip"), b"zip").unwrap();
         assert_eq!(games_with_saves(root.path()), [3]);
+    }
+
+    #[test]
+    fn memory_card_folders_are_made_before_play() {
+        let root = tempfile::tempdir().unwrap();
+        let card = GameSaves {
+            rom_id: 7,
+            dir: root.path().join("7"),
+            title: "Silent Hill 2".into(),
+            emulator: "armsx2".into(),
+            save_file: ARMSX2_CARD.into(),
+            save_emulator: PS2_CARD_EMULATOR.into(),
+            variant: None,
+        };
+        ensure_save_folder(&card);
+        assert!(root.path().join("7/pcsx2/memcards").is_dir());
+        let plain = GameSaves {
+            save_file: SRAM_FILE.into(),
+            ..card
+        };
+        ensure_save_folder(&plain);
+        // A top-level save needs no folder of its own.
+        let entries: Vec<_> = std::fs::read_dir(root.path().join("7")).unwrap().collect();
+        assert_eq!(entries.len(), 1);
     }
 
     #[test]
