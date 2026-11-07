@@ -175,8 +175,11 @@ fn is_track(p: &Path, files: &[PlannedFile]) -> bool {
 /// The files a player can choose to start a multi-file game with, such as a game with its
 /// translations or a folder of hacks of one game, the one RomP starts by itself first; or
 /// nothing when RomP starts the whole set itself: several discs, a PS3 game.
+///
+/// RomM reports `has_multiple_files` as false when a folder holds one game file beside its
+/// hacks or translations, so this goes by how many playable files there are instead.
 pub fn file_choices(rom: &RomDetail, files: &[PlannedFile]) -> Vec<PathBuf> {
-    if !rom.has_multiple_files || rom.platform_slug == crate::rpcs3::PLATFORM {
+    if rom.platform_slug == crate::rpcs3::PLATFORM {
         return Vec::new();
     }
     let sized: Vec<(PathBuf, u64)> = files
@@ -328,6 +331,31 @@ mod tests {
                 PathBuf::from("Super Metroid (Japan, USA).zip"),
             ]
         );
+    }
+
+    #[test]
+    fn single_flag_games_with_hacks_offer_each_one() {
+        // RomM reports `has_multiple_files` as false when a folder holds one game file
+        // beside its hacks (see RomP issue #39: Super Metroid with 1 game + 34 hacks).
+        let dir = "roms/snes/Super Metroid (Japan, USA)";
+        let mut r = rom(
+            false,
+            vec![
+                file(1, dir, "Super Metroid (Japan, USA).zip"),
+                file(2, &format!("{dir}/hack"), "Hyper Metroid.smc"),
+                file(3, &format!("{dir}/hack"), "Super Metroid - Advent.smc"),
+            ],
+        );
+        r.fs_path = "roms/snes".into();
+        r.fs_name = "Super Metroid (Japan, USA)".into();
+        r.platform_slug = "snes".into();
+        let planned = plan(&r).unwrap();
+        let got = file_choices(&r, &planned);
+        assert_eq!(got.len(), 3);
+        assert!(got
+            .iter()
+            .any(|p| p.ends_with("Super Metroid (Japan, USA).zip")));
+        assert!(got.iter().any(|p| p.ends_with("hack/Hyper Metroid.smc")));
     }
 
     #[test]
