@@ -31,6 +31,7 @@ const SHORTCUTS_HINT: &str = crate::gettext_noop!(
 );
 const PAD_HINT: &str =
     crate::gettext_noop!("Choose a button, then press the controller button you want for it.");
+const MENU_CAPTURE_HINT: &str = crate::gettext_noop!("Press the buttons…");
 
 impl Controller {
     pub(super) fn save_players(&self) {
@@ -79,6 +80,7 @@ impl Controller {
         ui.set_pref_nintendo_labels(mappings.nintendo_labels);
         ui.set_pref_stick_dpad(mappings.stick_dpad);
         drop(mappings);
+        self.show_menu_combo();
         ui.set_screen(SCREEN_SETTINGS);
         self.settings_section_changed(ui.get_settings_section());
     }
@@ -250,6 +252,7 @@ impl Controller {
     fn refresh_devices(&self) {
         let Some(ui) = self.ui() else { return };
         self.capture_pad_press();
+        self.capture_menu_combo();
         let rows = self.device_rows();
         let current = ui.get_settings_devices();
         let same_devices = current.row_count() == rows.len()
@@ -288,6 +291,79 @@ impl Controller {
             mappings.stick_dpad = ui.get_pref_stick_dpad();
         }
         self.save_mappings();
+    }
+
+    fn show_menu_combo(&self) {
+        let Some(ui) = self.ui() else { return };
+        let mappings = self.mappings.borrow();
+        let family = self
+            .gamepads
+            .borrow()
+            .family_in_use(&mappings)
+            .unwrap_or_default();
+        ui.set_pref_menu_combo(mapping::menu_combo_label(&mappings.menu_buttons(), family).into());
+        ui.set_pref_menu_capturing(self.menu_capturing.get());
+    }
+
+    pub(super) fn menu_combo_change(&self) {
+        *self.menu_pending.borrow_mut() = Vec::new();
+        self.menu_capturing.set(true);
+        if let Some(ui) = self.ui() {
+            ui.set_pref_menu_capturing(true);
+            ui.set_pref_menu_combo(translate(MENU_CAPTURE_HINT).into());
+        }
+    }
+
+    pub(super) fn menu_combo_save(&self) {
+        let pending = self.menu_pending.borrow().clone();
+        if !pending.is_empty() {
+            self.mappings.borrow_mut().set_menu_combo(pending);
+            self.save_mappings();
+        }
+        self.menu_capturing.set(false);
+        self.show_menu_combo();
+    }
+
+    pub(super) fn menu_combo_cancel(&self) {
+        self.menu_capturing.set(false);
+        self.show_menu_combo();
+    }
+
+    pub(super) fn menu_combo_reset(&self) {
+        self.menu_capturing.set(false);
+        self.mappings
+            .borrow_mut()
+            .set_menu_combo(vec![mapping::MENU_GUIDE]);
+        self.save_mappings();
+        self.show_menu_combo();
+    }
+
+    /// While capturing, shows the buttons held on any controller as the new combo.
+    fn capture_menu_combo(&self) {
+        if !self.menu_capturing.get() {
+            return;
+        }
+        let Some(ui) = self.ui() else { return };
+        let mappings = self.mappings.borrow();
+        let gamepads = self.gamepads.borrow();
+        let mut held = Vec::new();
+        for input in gamepads.states(&mappings, false) {
+            let mut buttons: Vec<u32> = (0..16u32)
+                .filter(|b| input.state.buttons & 1 << b != 0)
+                .collect();
+            if input.guide {
+                buttons.push(mapping::MENU_GUIDE);
+            }
+            if buttons.len() > held.len() {
+                held = buttons;
+            }
+        }
+        if held.is_empty() {
+            return;
+        }
+        *self.menu_pending.borrow_mut() = held.clone();
+        let family = gamepads.family_in_use(&mappings).unwrap_or_default();
+        ui.set_pref_menu_combo(mapping::menu_combo_label(&held, family).into());
     }
 
     fn show_key_hints(&self) {

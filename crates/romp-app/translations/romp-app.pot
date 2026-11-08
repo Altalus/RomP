@@ -624,6 +624,26 @@ msgid "Handy for games made for a D-pad."
 msgstr ""
 
 #: crates/romp-app/ui/app.slint
+msgid "Game menu buttons"
+msgstr ""
+
+#: crates/romp-app/ui/app.slint
+msgid "Hold them together to open the game menu. Select+Start always works too."
+msgstr ""
+
+#: crates/romp-app/ui/app.slint
+msgid "Change…"
+msgstr ""
+
+#: crates/romp-app/ui/app.slint
+msgid "Reset"
+msgstr ""
+
+#: crates/romp-app/ui/app.slint crates/romp-app/ui/game.slint
+msgid "Save"
+msgstr ""
+
+#: crates/romp-app/ui/app.slint
 msgid "Shortcuts"
 msgstr ""
 
@@ -858,10 +878,6 @@ msgstr ""
 
 #: crates/romp-app/ui/game.slint
 msgid "current"
-msgstr ""
-
-#: crates/romp-app/ui/game.slint
-msgid "Save"
 msgstr ""
 
 #: crates/romp-app/ui/game.slint

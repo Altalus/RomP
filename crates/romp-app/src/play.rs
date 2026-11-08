@@ -1176,9 +1176,17 @@ impl Game {
     }
 
     fn pads(&self, inputs: &[crate::gamepads::PadInput]) {
+        let wanted = self.mappings.borrow().menu_buttons();
         let combo = inputs.iter().any(|p| {
             let held = |b: u32| p.state.buttons & 1 << b != 0;
-            p.guide || (held(input::SELECT) && held(input::START))
+            // Select+Start always works too, the way it did before this option.
+            wanted.iter().all(|b| {
+                if *b == crate::mapping::MENU_GUIDE {
+                    p.guide
+                } else {
+                    held(*b)
+                }
+            }) || (held(input::SELECT) && held(input::START))
         });
         if combo && !self.menu_combo.get() {
             self.toggle_menu();
@@ -1515,11 +1523,9 @@ pub fn launch(
                 known.retain(|k| keys.contains(k));
                 first_poll = false;
                 let inputs = pads.states(&mappings.borrow(), nintendo);
-                let guide = crate::i18n::translate(
-                    pads.family_in_use(&mappings.borrow())
-                        .map_or("Guide", |family| {
-                            crate::pad_labels::name(family, crate::gamepads::Button::Mode)
-                        }),
+                let guide = crate::mapping::menu_combo_label(
+                    &mappings.borrow().menu_buttons(),
+                    pads.family_in_use(&mappings.borrow()).unwrap_or_default(),
                 );
                 if ui.get_guide_name() != guide.as_str() {
                     ui.set_guide_name(guide.into());

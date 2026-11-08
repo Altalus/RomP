@@ -2121,6 +2121,12 @@ component SettingsPage inherits FocusScope {
     in-out property <bool> nintendo-labels;
     in-out property <bool> stick-dpad;
     callback controller-options-changed();
+    in-out property <string> menu-combo;
+    in-out property <bool> menu-capturing;
+    callback menu-combo-change();
+    callback menu-combo-save();
+    callback menu-combo-cancel();
+    callback menu-combo-reset();
     callback customize(string);
     callback back();
     callback sign-out();
@@ -2380,6 +2386,16 @@ component SettingsPage inherits FocusScope {
                                 label: @tr("Left stick also moves the D-pad");
                                 detail: @tr("Handy for games made for a D-pad.");
                                 Switch { checked <=> root.stick-dpad; toggled => { root.controller-options-changed(); } }
+                            }
+                            SettingRow {
+                                divider: true;
+                                label: @tr("Game menu buttons");
+                                detail: @tr("Hold them together to open the game menu. Select+Start always works too.");
+                                Text { text: root.menu-combo; color: Theme.text-secondary; vertical-alignment: center; }
+                                if !root.menu-capturing: Button { text: @tr("Change…"); clicked => { root.menu-combo-change(); } }
+                                if !root.menu-capturing: Button { text: @tr("Reset"); clicked => { root.menu-combo-reset(); } }
+                                if root.menu-capturing: Button { text: @tr("Save"); clicked => { root.menu-combo-save(); } }
+                                if root.menu-capturing: Button { text: @tr("Cancel"); clicked => { root.menu-combo-cancel(); } }
                             }
                         }
                         Row {
@@ -2997,6 +3013,12 @@ export component AppWindow inherits Window {
     in-out property <bool> pref-nintendo-labels;
     in-out property <bool> pref-stick-dpad;
     callback controller-options-changed();
+    in-out property <string> pref-menu-combo;
+    in-out property <bool> pref-menu-capturing;
+    callback menu-combo-change();
+    callback menu-combo-save();
+    callback menu-combo-cancel();
+    callback menu-combo-reset();
     in property <bool> remap-open;
     in property <string> remap-title;
     in property <string> remap-hint;
@@ -3386,6 +3408,12 @@ export component AppWindow inherits Window {
             nintendo-labels <=> root.pref-nintendo-labels;
             stick-dpad <=> root.pref-stick-dpad;
             controller-options-changed => { root.controller-options-changed(); }
+            menu-combo <=> root.pref-menu-combo;
+            menu-capturing <=> root.pref-menu-capturing;
+            menu-combo-change => { root.menu-combo-change(); }
+            menu-combo-save => { root.menu-combo-save(); }
+            menu-combo-cancel => { root.menu-combo-cancel(); }
+            menu-combo-reset => { root.menu-combo-reset(); }
             customize(key) => { root.customize(key); }
             back => { root.back-to-library(); }
             sign-out => { root.sign-out(); }
