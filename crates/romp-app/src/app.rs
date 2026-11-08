@@ -144,6 +144,8 @@ struct Controller {
     mappings: Rc<RefCell<crate::mapping::Mappings>>,
     remap_device: RefCell<Option<String>>,
     remap_waiting: Cell<Option<u32>>,
+    menu_capturing: Cell<bool>,
+    menu_pending: RefCell<Vec<u32>>,
     nav_card: Cell<Option<usize>>,
     nav_repeat: RefCell<crate::navigation::Repeater>,
     pad_hints: RefCell<Vec<navigation::Hint>>,
@@ -260,6 +262,8 @@ pub fn run() -> anyhow::Result<()> {
         mappings: Rc::new(RefCell::new(mappings)),
         remap_device: RefCell::new(None),
         remap_waiting: Cell::new(None),
+        menu_capturing: Cell::new(false),
+        menu_pending: RefCell::new(Vec::new()),
         nav_card: Cell::new(None),
         nav_repeat: RefCell::default(),
         pad_hints: RefCell::default(),
@@ -346,6 +350,10 @@ impl Controller {
         ui.on_clear_images(|| with_controller(|c| c.clear_images()));
         ui.on_prefs_changed(|| with_controller(|c| c.prefs_changed()));
         ui.on_controller_options_changed(|| with_controller(|c| c.controller_options_changed()));
+        ui.on_menu_combo_change(|| with_controller(|c| c.menu_combo_change()));
+        ui.on_menu_combo_save(|| with_controller(|c| c.menu_combo_save()));
+        ui.on_menu_combo_cancel(|| with_controller(|c| c.menu_combo_cancel()));
+        ui.on_menu_combo_reset(|| with_controller(|c| c.menu_combo_reset()));
         ui.on_customize(|device| with_controller(|c| c.customize(device.to_string())));
         ui.on_remap_pick(|i| with_controller(|c| c.remap_pick(i)));
         ui.on_remap_key(|text, m| {

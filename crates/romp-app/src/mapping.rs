@@ -26,6 +26,10 @@ pub const BUTTONS: [(u32, &str); 16] = [
     (RIGHT, gettext_noop!("Right")),
 ];
 
+/// The Guide/PS/Xbox/Home button as a menu combo member. It has no game button
+/// id because it never reaches the game.
+pub const MENU_GUIDE: u32 = 16;
+
 const PHYSICAL: [Button; 17] = [
     Button::South,
     Button::East,
@@ -283,6 +287,9 @@ pub struct Mappings {
     labels: BTreeMap<String, String>,
     pub nintendo_labels: bool,
     pub stick_dpad: bool,
+    /// The buttons held together to open the game menu. Empty means the Guide
+    /// button, which is how settings saved before this option look.
+    pub menu_combo: Vec<u32>,
 }
 
 impl Mappings {
@@ -438,6 +445,54 @@ impl Mappings {
     pub fn family(&self, model: &str, detected: Family) -> Family {
         self.labels(model).unwrap_or(detected)
     }
+
+    /// The buttons that open the game menu: the saved combo, or the Guide
+    /// button for settings saved before this option.
+    pub fn menu_buttons(&self) -> Vec<u32> {
+        if self.menu_combo.is_empty() {
+            vec![MENU_GUIDE]
+        } else {
+            let mut combo = self.menu_combo.clone();
+            combo.sort_unstable();
+            combo.dedup();
+            combo
+        }
+    }
+
+    /// Saves `combo`, keeping the Guide default out of the JSON.
+    pub fn set_menu_combo(&mut self, combo: Vec<u32>) {
+        let mut combo: Vec<u32> = combo
+            .into_iter()
+            .filter(|b| *b == MENU_GUIDE || BUTTONS.iter().any(|(button, _)| button == b))
+            .collect();
+        combo.sort_unstable();
+        combo.dedup();
+        self.menu_combo = if combo == [MENU_GUIDE] {
+            Vec::new()
+        } else {
+            combo
+        };
+    }
+}
+
+/// The menu combo as the person sees it, like "L3 + R3".
+pub fn menu_combo_label(combo: &[u32], family: Family) -> String {
+    let mut combo = combo.to_vec();
+    combo.sort_unstable();
+    combo
+        .iter()
+        .map(|b| {
+            if *b == MENU_GUIDE {
+                crate::i18n::translate(crate::pad_labels::name(
+                    family,
+                    crate::gamepads::Button::Mode,
+                ))
+            } else {
+                crate::i18n::translate(name(*b))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" + ")
 }
 
 pub fn model_of(pad_key: &str) -> &str {
@@ -721,5 +776,34 @@ mod tests {
         assert_eq!(as_seen(RIGHT, true), LEFT);
         assert_eq!(as_seen(UP, true), UP);
         assert_eq!(as_seen(LEFT, false), LEFT);
+    }
+
+    #[test]
+    fn the_menu_opens_with_guide_unless_saved_otherwise() {
+        let m = Mappings::default();
+        assert_eq!(m.menu_buttons(), [MENU_GUIDE]);
+        assert_eq!(menu_combo_label(&m.menu_buttons(), Family::Other), "Guide");
+        assert_eq!(
+            menu_combo_label(&m.menu_buttons(), Family::Xbox),
+            "Xbox button"
+        );
+        let mut m = Mappings::default();
+        m.set_menu_combo(vec![R3, L3]);
+        assert_eq!(m.menu_buttons(), [L3, R3]);
+        assert_eq!(
+            menu_combo_label(&m.menu_buttons(), Family::Other),
+            "L3 + R3"
+        );
+        // The Guide default stays out of the JSON, like settings saved before it.
+        let mut m = Mappings::default();
+        m.set_menu_combo(vec![MENU_GUIDE]);
+        assert!(m.menu_combo.is_empty());
+        let restored = Mappings::from_json(Some(&m.to_json()));
+        assert_eq!(restored.menu_buttons(), [MENU_GUIDE]);
+        assert_eq!(restored, Mappings::default());
+        // Unknown buttons never make it in, and duplicates collapse.
+        let mut m = Mappings::default();
+        m.set_menu_combo(vec![99, X, SELECT, X]);
+        assert_eq!(m.menu_buttons(), [SELECT, X]);
     }
 }
