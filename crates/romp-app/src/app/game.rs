@@ -572,6 +572,7 @@ impl Controller {
             Err(DownloadError::Cancelled) => Err(None),
             Err(e) => Err(Some(e.to_string())),
         };
+        let downloaded = result.is_ok();
         let status = match result {
             Ok(path) => {
                 self.shared
@@ -598,6 +599,10 @@ impl Controller {
             }
         }
         self.refresh_game_page(true);
+        if downloaded {
+            self.reload_sidebar();
+            self.reload_games();
+        }
         match origin {
             Origin::Install(request_id) => self.install_finished(request_id, outcome),
             Origin::Page => self.pump_installs(),
@@ -1358,6 +1363,8 @@ impl Controller {
             .set_local_path(detail.id, None);
         self.game_status(detail.id, String::new());
         self.refresh_game_page(true);
+        self.reload_sidebar();
+        self.reload_games();
     }
 }
 
