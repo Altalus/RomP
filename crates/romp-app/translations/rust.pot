@@ -596,6 +596,10 @@ msgstr ""
 msgid "Backlog"
 msgstr ""
 
+#: crates/romp-app/src/app/collections.rs
+msgid "Downloaded"
+msgstr ""
+
 #: crates/romp-app/src/app/collections.rs crates/romp-app/src/storage.rs
 msgid "Games"
 msgstr ""
