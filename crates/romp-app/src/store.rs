@@ -87,6 +87,7 @@ pub enum Scope {
     ForYou,
     NowPlaying,
     Backlog,
+    Downloaded,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -653,9 +654,12 @@ impl Store {
             ))
             .expect("prepare");
         let (platform, collection) = match &filter.scope {
-            Scope::All | Scope::Recent | Scope::ForYou | Scope::NowPlaying | Scope::Backlog => {
-                (None, None)
-            }
+            Scope::All
+            | Scope::Recent
+            | Scope::ForYou
+            | Scope::NowPlaying
+            | Scope::Backlog
+            | Scope::Downloaded => (None, None),
             Scope::Platform(id) => (Some(*id), None),
             Scope::Collection(key) => (None, Some(key.as_str())),
         };
@@ -663,11 +667,14 @@ impl Store {
         let for_you = filter.scope == Scope::ForYou;
         let now_playing = filter.scope == Scope::NowPlaying;
         let backlog = filter.scope == Scope::Backlog;
+        // The Downloaded scope shows downloaded games the way the downloaded-only mode
+        // does: the downloaded version of each card, and nothing else.
+        let downloaded_only = filter.downloaded_only || filter.scope == Scope::Downloaded;
         stmt.query_map(
             params![
                 platform,
                 pattern,
-                filter.downloaded_only,
+                downloaded_only,
                 collection,
                 recent,
                 for_you,
@@ -954,6 +961,20 @@ impl Store {
                 },
             )
             .unwrap_or_default()
+    }
+
+    /// How many downloaded games the library holds.
+    pub fn downloaded_count(&self, downloaded_only: bool) -> i64 {
+        self.conn
+            .query_row(
+                &format!(
+                    "WITH {SHOWN} SELECT COALESCE(SUM(entries), 0) FROM shown
+                     WHERE card IN (SELECT card FROM games WHERE local_path IS NOT NULL)"
+                ),
+                [downloaded_only],
+                |r| r.get(0),
+            )
+            .expect("count downloaded")
     }
 
     /// How many games are now playing and how many are in the backlog.
@@ -2113,6 +2134,8 @@ mod tests {
             ..GameFilter::default()
         };
         assert_eq!(ids(&s, downloaded), [11]);
+        assert_eq!(ids(&s, scoped(Scope::Downloaded)), [11]);
+        assert_eq!(s.downloaded_count(false), 1);
         assert_eq!(s.recent_count(true), 1);
         assert_eq!(s.platforms(true)[0].count, 1);
     }
