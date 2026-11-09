@@ -53,6 +53,19 @@ pub fn name(button: u32) -> &'static str {
         .map_or("?", |(_, n)| n)
 }
 
+/// The buttons a console really has, for its remap list. Consoles not listed
+/// here show every button, like the controller's own list does.
+pub fn supported_buttons(platform: &str) -> Option<&'static [u32]> {
+    Some(match platform {
+        "gb" | "gbc" => &[A, B, START, SELECT, UP, DOWN, LEFT, RIGHT],
+        "gba" => &[A, B, L, R, START, SELECT, UP, DOWN, LEFT, RIGHT],
+        "nes" => &[A, B, START, SELECT, UP, DOWN, LEFT, RIGHT],
+        "famicom" | "fds" => &[A, B, UP, DOWN, LEFT, RIGHT],
+        "snes" | "sfam" => &[A, B, X, Y, L, R, START, SELECT, UP, DOWN, LEFT, RIGHT],
+        _ => return None,
+    })
+}
+
 fn physical_name(button: Button) -> String {
     format!("{button:?}")
 }
@@ -786,6 +799,21 @@ mod tests {
         assert_eq!(key_label(&key(Key::Escape)), "Esc");
         assert_eq!(key_label(""), "Not set");
         assert_eq!(name(L2), "L2");
+    }
+
+    #[test]
+    fn remap_lists_only_show_what_the_console_has() {
+        let gba = supported_buttons("gba").expect("handhelds are listed");
+        assert!(gba.contains(&A) && gba.contains(&B));
+        assert!(!gba.contains(&X) && !gba.contains(&Y));
+        // Shoulder buttons the Game Boy line never had stay hidden too.
+        assert!(!supported_buttons("gb").unwrap().contains(&L));
+        assert!(supported_buttons("snes")
+            .unwrap()
+            .contains(&X));
+        // Unknown consoles remap every button, like controllers do.
+        assert!(supported_buttons("psx").is_none());
+        assert!(supported_buttons("pce").is_none());
     }
 
     #[test]

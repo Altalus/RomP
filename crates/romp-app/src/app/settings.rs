@@ -186,16 +186,15 @@ impl Controller {
     }
 
     pub(super) fn settings_section_changed(&self, section: i32) {
-        let watching = section == SECTION_PLAYERS;
-        if watching {
+        // The remap dialog can open from any section, and its button capture
+        // runs on this timer, so it polls everywhere in settings.
+        if self.settings_timer.borrow().is_none() {
             self.refresh_devices();
             let timer = Timer::default();
             timer.start(TimerMode::Repeated, Duration::from_millis(50), || {
                 with_controller(|c| c.refresh_devices());
             });
             *self.settings_timer.borrow_mut() = Some(timer);
-        } else {
-            self.settings_timer.borrow_mut().take();
         }
         if section == SECTION_STORAGE {
             self.measure_storage();
@@ -337,8 +336,7 @@ impl Controller {
         ui.set_remap_open(true);
     }
 
-    fn show_remap(&self, notice: Option<&str>) {
-        let Some(ui) = self.ui() else { return };
+    fn show_remap(&self, notice: Option<&str>) {        let Some(ui) = self.ui() else { return };
         let Some(device) = self.remap_device.borrow().clone() else {
             return;
         };
@@ -369,8 +367,7 @@ impl Controller {
             return;
         }
         let model = mapping::model_of(&device);
-        let detected = if platform.is_some() {
-            // Name positions for the controller in use, like its own dialog does.
+        let detected = if platform.is_some() {            // Name positions for the controller in use, like its own dialog does.
             self.gamepads
                 .borrow()
                 .family_in_use(&mappings)
@@ -400,7 +397,7 @@ impl Controller {
                 .map_or(0, |i| i as i32 + 1),
         );
         ui.set_remap_labels_shown(!keyboard && platform.is_none());
-        let rows: Vec<RemapRow> = BUTTONS
+        let rows: Vec<RemapRow> = remap_buttons(platform.as_deref())
             .iter()
             .map(|(button, name)| RemapRow {
                 name: translate(name).into(),
@@ -431,12 +428,16 @@ impl Controller {
     }
 
     pub(super) fn remap_pick(&self, index: i32) {
-        let shortcuts = self.remap_device.borrow().as_deref() == Some(SHORTCUTS);
+        let device = self.remap_device.borrow().clone();
+        let shortcuts = device.as_deref() == Some(SHORTCUTS);
         let button = usize::try_from(index).ok().and_then(|i| {
             if shortcuts {
                 (i < HOTKEYS.len()).then_some(i as u32)
             } else {
-                BUTTONS.get(i).map(|(b, _)| *b)
+                let platform = device
+                    .as_deref()
+                    .and_then(|d| d.strip_prefix(PLATFORM_PREFIX));
+                remap_buttons(platform).get(i).map(|(b, _)| *b)
             }
         });
         self.remap_waiting.set(button);
@@ -764,6 +765,19 @@ impl Controller {
             },
         };
         ui.set_about_log_note(note.into());
+    }
+}
+
+/// The buttons a remap list offers: only what the console really has when
+/// remapping one, every button otherwise.
+fn remap_buttons(platform: Option<&str>) -> Vec<(u32, &'static str)> {
+    match platform.and_then(mapping::supported_buttons) {
+        Some(supported) => BUTTONS
+            .iter()
+            .filter(|(b, _)| supported.contains(b))
+            .copied()
+            .collect(),
+        None => BUTTONS.to_vec(),
     }
 }
 
