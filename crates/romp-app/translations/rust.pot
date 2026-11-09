@@ -431,6 +431,14 @@ msgid "{0} now uses {1}."
 msgstr ""
 
 #: crates/romp-app/src/app/settings.rs
+msgid "Custom"
+msgstr ""
+
+#: crates/romp-app/src/app/settings.rs
+msgid "Default"
+msgstr ""
+
+#: crates/romp-app/src/app/settings.rs
 msgid "No game was played in RomP’s last five launches."
 msgstr ""
 

@@ -10,8 +10,8 @@ use crate::players::KEYBOARD;
 use crate::prefs::{Preferences, UI_SCALES};
 use crate::RemapRow;
 use crate::{
-    paths, storage, ConsoleGroup, ConsoleOption, DeviceRow, KeyHint, LookConsole, LookSetting,
-    StorageRow,
+    paths, storage, ConsoleButtons, ConsoleGroup, ConsoleOption, DeviceRow, KeyHint, LookConsole,
+    LookSetting, StorageRow,
 };
 use slint::{ComponentHandle, Model, ModelRc, Timer, TimerMode, VecModel};
 use std::time::Duration;
@@ -23,6 +23,9 @@ const SECTION_CONSOLES: i32 = 4;
 const SECTION_LOOKS: i32 = 5;
 
 pub(super) const SHORTCUTS: &str = "shortcuts";
+/// A console's buttons, remapped for every controller: `customize()` and the
+/// remap dialog take `platform:<slug>` as the device.
+const PLATFORM_PREFIX: &str = "platform:";
 
 const KEYBOARD_HINT: &str =
     crate::gettext_noop!("Choose a button, then press the key you want for it.");
@@ -199,6 +202,7 @@ impl Controller {
         }
         if section == SECTION_CONSOLES {
             self.show_consoles();
+            self.show_button_consoles();
         }
         if section == SECTION_LOOKS {
             self.show_looks();
@@ -311,6 +315,15 @@ impl Controller {
             tr!("Shortcuts")
         } else if device == KEYBOARD {
             tr!("Keyboard")
+        } else if let Some(platform) = device.strip_prefix(PLATFORM_PREFIX) {
+            self.shared
+                .store
+                .lock()
+                .unwrap()
+                .platforms(false)
+                .into_iter()
+                .find(|p| p.slug == platform)
+                .map_or_else(|| tr!("Controller"), |p| p.name)
         } else {
             let pads = self.gamepads.borrow().connected();
             pads.into_iter()
@@ -330,6 +343,9 @@ impl Controller {
             return;
         };
         let keyboard = device == KEYBOARD;
+        let platform = device
+            .strip_prefix(PLATFORM_PREFIX)
+            .map(str::to_string);
         let waiting = self.remap_waiting.get();
         let mappings = self.mappings.borrow();
         if device == SHORTCUTS {
@@ -353,13 +369,20 @@ impl Controller {
             return;
         }
         let model = mapping::model_of(&device);
-        let detected = self
-            .gamepads
-            .borrow()
-            .connected()
-            .into_iter()
-            .find(|pad| pad.key == device)
-            .map_or_else(Default::default, |pad| pad.family);
+        let detected = if platform.is_some() {
+            // Name positions for the controller in use, like its own dialog does.
+            self.gamepads
+                .borrow()
+                .family_in_use(&mappings)
+                .unwrap_or_default()
+        } else {
+            self.gamepads
+                .borrow()
+                .connected()
+                .into_iter()
+                .find(|pad| pad.key == device)
+                .map_or_else(Default::default, |pad| pad.family)
+        };
         let family = mappings.family(model, detected);
         let automatic = match detected.choice() {
             Some(i) => tr!("Automatic ({})", translate(CHOICES[i].2)),
@@ -376,13 +399,18 @@ impl Controller {
                 .and_then(Family::choice)
                 .map_or(0, |i| i as i32 + 1),
         );
-        ui.set_remap_labels_shown(!keyboard);
+        ui.set_remap_labels_shown(!keyboard && platform.is_none());
         let rows: Vec<RemapRow> = BUTTONS
             .iter()
             .map(|(button, name)| RemapRow {
                 name: translate(name).into(),
                 binding: if keyboard {
                     mapping::key_label(&mappings.key_for(*button))
+                } else if let Some(platform) = &platform {
+                    translate(crate::pad_labels::name(
+                        family,
+                        mappings.effective_pad_button(platform, "", *button),
+                    ))
                 } else {
                     translate(crate::pad_labels::name(
                         family,
@@ -474,6 +502,21 @@ impl Controller {
         if device == KEYBOARD || device == SHORTCUTS {
             return;
         }
+        if let Some(platform) = device.strip_prefix(PLATFORM_PREFIX) {
+            // Positions read the same on every controller, so any pad's press does.
+            let presses = self.gamepads.borrow_mut().take_presses();
+            let Some((_, physical)) = presses.into_iter().next() else {
+                return;
+            };
+            self.mappings
+                .borrow_mut()
+                .set_platform_pad_button(platform, button, physical);
+            self.remap_waiting.set(None);
+            self.save_mappings();
+            self.show_remap(None);
+            self.show_button_consoles();
+            return;
+        }
         let model = mapping::model_of(&device).to_string();
         let presses = self.gamepads.borrow_mut().take_presses();
         let Some((_, physical)) = presses
@@ -498,6 +541,9 @@ impl Controller {
             self.mappings.borrow_mut().reset_hotkeys();
         } else if device == KEYBOARD {
             self.mappings.borrow_mut().reset_keyboard();
+        } else if let Some(platform) = device.strip_prefix(PLATFORM_PREFIX) {
+            self.mappings.borrow_mut().reset_platform(platform);
+            self.show_button_consoles();
         } else {
             self.mappings
                 .borrow_mut()
@@ -553,6 +599,35 @@ impl Controller {
                 .get(console_settings::STORE_KEY)
                 .as_deref(),
         )
+    }
+
+    /// Every console in the library whose emulator RomP drives itself, for its
+    /// buttons: the name RomM gives it, and whether its layout changes.
+    fn show_button_consoles(&self) {
+        let Some(ui) = self.ui() else { return };
+        let consoles: Vec<ConsoleButtons> = self
+            .shared
+            .store
+            .lock()
+            .unwrap()
+            .platforms(false)
+            .into_iter()
+            .filter(|p| crate::cores::core_for_platform(&p.slug).is_some())
+            .map(|p| ConsoleButtons {
+                name: p.name.into(),
+                slug: p.slug.clone().into(),
+                detail: self.platform_button_detail(&p.slug),
+            })
+            .collect();
+        ui.set_settings_button_consoles(ModelRc::new(VecModel::from(consoles)));
+    }
+
+    fn platform_button_detail(&self, platform: &str) -> slint::SharedString {
+        if self.mappings.borrow().has_platform_buttons(platform) {
+            tr!("Custom").into()
+        } else {
+            tr!("Default").into()
+        }
     }
 
     fn show_consoles(&self) {

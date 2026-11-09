@@ -590,6 +590,7 @@ msgid "Button pressed"
 msgstr ""
 
 #: crates/romp-app/ui/app.slint
+#: crates/romp-app/ui/app.slint
 msgid "Customize…"
 msgstr ""
 
@@ -651,6 +652,10 @@ msgstr ""
 
 #: crates/romp-app/ui/app.slint
 msgid "None of the emulators on this computer has settings yet."
+msgstr ""
+
+#: crates/romp-app/ui/app.slint
+msgid "Buttons"
 msgstr ""
 
 #: crates/romp-app/ui/app.slint

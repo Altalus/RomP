@@ -31,7 +31,7 @@ impl Controller {
             let mut gamepads = self.gamepads.borrow_mut();
             gamepads.poll();
             let mappings = self.mappings.borrow();
-            let inputs = gamepads.states(&mappings, false);
+            let inputs = gamepads.states(&mappings, "", false);
             let family =
                 (!inputs.is_empty()).then(|| gamepads.family_in_use(&mappings).unwrap_or_default());
             (inputs, family)

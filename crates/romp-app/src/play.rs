@@ -51,7 +51,8 @@ pub struct GameOptions {
     pub auto_state: bool,
     /// Whether the emulator's save states bring a game back; without them there are no slots.
     pub states: bool,
-    pub mappings: Rc<RefCell<Mappings>>,
+    pub     mappings: Rc<RefCell<Mappings>>,
+    pub platform: String,
     pub nintendo: bool,
     pub mouse: bool,
     pub computer: bool,
@@ -158,6 +159,7 @@ pub fn run(
             auto_state: states,
             states,
             mappings: Rc::default(),
+            platform: String::new(),
             nintendo: false,
             mouse: false,
             computer: false,
@@ -203,6 +205,7 @@ struct Game {
     finish: Rc<dyn Fn()>,
     open_controllers: Box<dyn Fn()>,
     mappings: Rc<RefCell<Mappings>>,
+    platform: String,
     menu_focus: Cell<i32>,
     pad_buttons: Cell<u16>,
     menu_combo: Cell<bool>,
@@ -1410,6 +1413,7 @@ pub fn launch(
             finish,
             open_controllers: Box::new(open_controllers),
             mappings: opts.mappings.clone(),
+            platform: opts.platform.clone(),
             menu_focus: Cell::new(-1),
             pad_buttons: Cell::new(0),
             menu_combo: Cell::new(false),
@@ -1514,7 +1518,7 @@ pub fn launch(
                 }
                 known.retain(|k| keys.contains(k));
                 first_poll = false;
-                let inputs = pads.states(&mappings.borrow(), nintendo);
+                let inputs = pads.states(&mappings.borrow(), &game.platform, nintendo);
                 let guide = crate::i18n::translate(
                     pads.family_in_use(&mappings.borrow())
                         .map_or("Guide", |family| {

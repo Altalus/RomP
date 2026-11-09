@@ -1245,6 +1245,7 @@ impl Controller {
             auto_state: reliable,
             states,
             mappings: self.mappings.clone(),
+            platform: detail.platform_slug.clone(),
             nintendo: crate::cores::is_nintendo(&detail.platform_slug),
             mouse: core_for_platform(&detail.platform_slug)
                 .is_some_and(|core| crate::cores::uses_mouse(core.id)),

@@ -283,6 +283,9 @@ pub struct Mappings {
     labels: BTreeMap<String, String>,
     pub nintendo_labels: bool,
     pub stick_dpad: bool,
+    /// A console's buttons by position, shared by every controller, which win
+    /// over the controller's own layout: `platform -> button -> position`.
+    platform_buttons: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 impl Mappings {
@@ -437,6 +440,53 @@ impl Mappings {
 
     pub fn family(&self, model: &str, detected: Family) -> Family {
         self.labels(model).unwrap_or(detected)
+    }
+
+    /// What position a console's button is on: its own layout first, then the
+    /// controller's, then the built-in one. Empty platforms read as no layout.
+    pub fn platform_pad_button(&self, platform: &str, button: u32) -> Option<Button> {
+        self.platform_buttons
+            .get(platform)
+            .and_then(|m| m.get(name(button)))
+            .and_then(|p| physical_named(p))
+    }
+
+    pub fn effective_pad_button(
+        &self,
+        platform: &str,
+        model: &str,
+        button: u32,
+    ) -> Button {
+        self.platform_pad_button(platform, button)
+            .unwrap_or_else(|| self.pad_button(model, button))
+    }
+
+    /// Hands `button` to `physical` on `platform`, swapping with whatever
+    /// button had it there; other consoles and controllers keep theirs.
+    pub fn set_platform_pad_button(&mut self, platform: &str, button: u32, physical: Button) {
+        let previous = self
+            .platform_pad_button(platform, button)
+            .unwrap_or_else(|| default_physical(button));
+        let other = BUTTONS
+            .iter()
+            .map(|(b, _)| *b)
+            .find(|b| *b != button && self.platform_pad_button(platform, *b) == Some(physical));
+        let layout = self.platform_buttons.entry(platform.to_string()).or_default();
+        if let Some(other) = other {
+            layout.insert(name(other).into(), physical_name(previous));
+        }
+        layout.insert(name(button).into(), physical_name(physical));
+    }
+
+    /// Whether `platform` changes any button from the controller's layout.
+    pub fn has_platform_buttons(&self, platform: &str) -> bool {
+        self.platform_buttons
+            .get(platform)
+            .is_some_and(|m| !m.is_empty())
+    }
+
+    pub fn reset_platform(&mut self, platform: &str) {
+        self.platform_buttons.remove(platform);
     }
 }
 
@@ -654,6 +704,29 @@ mod tests {
         assert_eq!(restored, m);
         m.reset_pad("xbox");
         assert_eq!(m.pad_button("xbox", A), Button::East);
+    }
+
+    #[test]
+    fn consoles_override_positions_without_touching_other_consoles() {
+        let mut m = Mappings::default();
+        m.set_pad_button("xbox", A, Button::South);
+        // Two-button consoles use the top and right buttons instead.
+        m.set_platform_pad_button("pce", A, Button::East);
+        m.set_platform_pad_button("pce", B, Button::North);
+        assert_eq!(m.effective_pad_button("pce", "xbox", A), Button::East);
+        assert_eq!(m.effective_pad_button("pce", "xbox", B), Button::North);
+        assert_eq!(m.effective_pad_button("pce", "xbox", X), Button::North);
+        // Other consoles and pads still read the controller's layout.
+        assert_eq!(m.effective_pad_button("snes", "xbox", A), Button::South);
+        assert_eq!(m.effective_pad_button("pce", "other", A), Button::East);
+        assert!(m.has_platform_buttons("pce"));
+        assert!(!m.has_platform_buttons("snes"));
+        let restored = Mappings::from_json(Some(&m.to_json()));
+        assert_eq!(restored, m);
+        m.reset_platform("pce");
+        assert!(!m.has_platform_buttons("pce"));
+        assert_eq!(m.effective_pad_button("pce", "xbox", A), Button::South);
+        assert_eq!(m.pad_button("xbox", A), Button::South);
     }
 
     #[test]

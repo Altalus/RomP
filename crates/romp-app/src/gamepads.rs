@@ -448,14 +448,19 @@ impl Gamepads {
             .collect()
     }
 
-    pub fn states(&self, mappings: &Mappings, nintendo: bool) -> Vec<PadInput> {
+    pub fn states(
+        &self,
+        mappings: &Mappings,
+        platform: &str,
+        nintendo: bool,
+    ) -> Vec<PadInput> {
         self.keys()
             .into_iter()
             .zip(self.pads())
             .map(|(key, pad)| {
                 let model = mapping::model_of(&key);
                 let family = mappings.family(model, pad.family);
-                let state = pad_state(pad, mappings, model);
+                let state = pad_state(pad, mappings, model, platform);
                 let menu = mapping::stick_to_dpad(PadState {
                     buttons: menu_buttons(|b| pad.pressed(b), family),
                     axes: state.axes,
@@ -542,10 +547,10 @@ fn game_state(state: PadState, mappings: &Mappings, nintendo: bool, family: Fami
     }
 }
 
-fn pad_state(pad: &Pad, mappings: &Mappings, model: &str) -> PadState {
+fn pad_state(pad: &Pad, mappings: &Mappings, model: &str, platform: &str) -> PadState {
     let mut state = PadState::default();
     for (button, _) in BUTTONS {
-        if pad.pressed(mappings.pad_button(model, button)) {
+        if pad.pressed(mappings.effective_pad_button(platform, model, button)) {
             state.buttons |= 1 << button;
         }
     }
@@ -556,8 +561,8 @@ fn pad_state(pad: &Pad, mappings: &Mappings, model: &str) -> PadState {
         input::stick(axis(Axis::LeftY), false),
         input::stick(axis(Axis::RightX), false),
         input::stick(axis(Axis::RightY), false),
-        trigger(mappings.pad_button(model, input::L2)),
-        trigger(mappings.pad_button(model, input::R2)),
+        trigger(mappings.effective_pad_button(platform, model, input::L2)),
+        trigger(mappings.effective_pad_button(platform, model, input::R2)),
     ];
     state
 }

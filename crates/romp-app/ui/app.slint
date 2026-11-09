@@ -13,7 +13,8 @@ export struct DeviceRow { key: string, name: string, detail: string, player: int
 export struct StorageRow { label: string, size: string }
 export struct LicenseRow { name: string, license: string, url: string }
 export struct ConsoleOption { key: string, label: string, detail: string, choices: [string], current: int }
-export struct ConsoleGroup { name: string, options: [ConsoleOption] }
+    export struct ConsoleGroup { name: string, options: [ConsoleOption] }
+    export struct ConsoleButtons { name: string, slug: string, detail: string }
 export struct LookSetting { label: string, choices: [string], current: int }
 export struct LookConsole { slug: string, name: string, settings: [LookSetting] }
 export struct KeyHint { keys: string, action: string }
@@ -2103,6 +2104,7 @@ component SettingsPage inherits FocusScope {
     in property <[StorageRow]> storage;
     in property <[ConsoleGroup]> consoles;
     callback console-option-changed(string, int);
+    in property <[ConsoleButtons]> button-consoles;
     in property <[LookConsole]> looks;
     callback look-setting-changed(string, int, int);
     in property <string> storage-total;
@@ -2442,6 +2444,18 @@ component SettingsPage inherits FocusScope {
                         if root.consoles.length == 0: Text { horizontal-alignment: Locale.start;
                             text: @tr("None of the emulators on this computer has settings yet.");
                             color: Theme.text-muted;
+                        }
+                        if root.button-consoles.length > 0: VerticalLayout {
+                            spacing: 8px;
+                            Text { horizontal-alignment: Locale.start; text: @tr("Buttons"); font-size: Theme.font-body-large; font-weight: 700; }
+                            Panel {
+                                for console[i] in root.button-consoles: SettingRow {
+                                    divider: i > 0;
+                                    label: console.name;
+                                    detail: console.detail;
+                                    Button { text: @tr("Customize…"); clicked => { root.customize("platform:" + console.slug); } }
+                                }
+                            }
                         }
                     }
                     if root.section == 5: VerticalLayout {
@@ -2967,6 +2981,7 @@ export component AppWindow inherits Window {
     in property <[StorageRow]> settings-storage;
     in property <[LicenseRow]> about-licenses;
     in property <[ConsoleGroup]> settings-consoles;
+    in property <[ConsoleButtons]> settings-button-consoles;
     in property <[LookConsole]> settings-looks;
     callback look-setting-changed(string, int, int);
     callback console-option-changed(string, int);
@@ -3370,6 +3385,7 @@ export component AppWindow inherits Window {
             storage-busy: root.settings-storage-busy;
             consoles: root.settings-consoles;
             console-option-changed(key, index) => { root.console-option-changed(key, index); }
+            button-consoles: root.settings-button-consoles;
             looks: root.settings-looks;
             look-setting-changed(platform, row, index) => { root.look-setting-changed(platform, row, index); }
             pause-unfocused <=> root.pref-pause-unfocused;
