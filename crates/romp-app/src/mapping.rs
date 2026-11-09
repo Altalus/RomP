@@ -62,6 +62,13 @@ pub fn supported_buttons(platform: &str) -> Option<&'static [u32]> {
         "nes" => &[A, B, START, SELECT, UP, DOWN, LEFT, RIGHT],
         "famicom" | "fds" => &[A, B, UP, DOWN, LEFT, RIGHT],
         "snes" | "sfam" => &[A, B, X, Y, L, R, START, SELECT, UP, DOWN, LEFT, RIGHT],
+        // Genesis Plus GX reads both Sega buttons, and Start as pause, from these.
+        "sms" | "gamegear" => &[A, B, START, UP, DOWN, LEFT, RIGHT],
+        "sg1000" => &[A, B, UP, DOWN, LEFT, RIGHT],
+        // Mednafen reads PCE buttons II and I, Select and Run, from these.
+        "tg16" | "turbografx-cd" | "supergrafx" => {
+            &[A, B, SELECT, START, UP, DOWN, LEFT, RIGHT]
+        }
         _ => return None,
     })
 }
@@ -806,14 +813,23 @@ mod tests {
         let gba = supported_buttons("gba").expect("handhelds are listed");
         assert!(gba.contains(&A) && gba.contains(&B));
         assert!(!gba.contains(&X) && !gba.contains(&Y));
-        // Shoulder buttons the Game Boy line never had stay hidden too.
+        // Shoulder buttons the Game Boy never had stay hidden too.
         assert!(!supported_buttons("gb").unwrap().contains(&L));
         assert!(supported_buttons("snes")
             .unwrap()
             .contains(&X));
+        // Two-button Sega and NEC consoles show those, and Start or Run.
+        let sms = supported_buttons("sms").expect("sega 8-bit is listed");
+        assert!(sms.contains(&A) && sms.contains(&B) && sms.contains(&START));
+        assert!(!sms.contains(&X) && !sms.contains(&SELECT));
+        let pce = supported_buttons("tg16").expect("nec is listed");
+        assert!(pce.contains(&A) && pce.contains(&B));
+        assert!(pce.contains(&SELECT) && pce.contains(&START));
+        assert!(!pce.contains(&X) && !pce.contains(&Y));
+        assert_eq!(supported_buttons("turbografx-cd"), supported_buttons("tg16"));
         // Unknown consoles remap every button, like controllers do.
         assert!(supported_buttons("psx").is_none());
-        assert!(supported_buttons("pce").is_none());
+        assert!(supported_buttons("genesis").is_none());
     }
 
     #[test]
